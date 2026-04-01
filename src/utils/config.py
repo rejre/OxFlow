@@ -16,7 +16,8 @@ VALID_LANGUAGES = ["en", "zh_CN", "ja"]
 
 
 class ConfigManager:
-    CONFIG_VERSION = 2
+    # 升级到版本 8 以应用新的静默默认值
+    CONFIG_VERSION = 8
 
     def __init__(self, config_path: str = None):
         self.config_path = config_path or os.path.expanduser("~/.oxflow_config.json")
@@ -26,26 +27,41 @@ class ConfigManager:
             "download_path": os.path.expanduser("~/Downloads"),
             "ffmpeg_path": self._auto_find_ffmpeg(),
             "default_quality": "1080p",
+            "proxy_url": "",
+            "cookies_browser": "none",
             "low_power_mode": False,
             "max_retries": 10,
             "concurrent_fragments": 4,
+            "appearance_mode": "System",
+            "window_opacity": 1.0,
             "history": [],
         }
         self.settings: dict = {}
         self.load()
 
     def _auto_find_ffmpeg(self) -> str:
+        # 1. 检查环境变量 PATH
         found = shutil.which("ffmpeg")
         if found:
             return os.path.dirname(found)
 
+        # 2. 检查 macOS 常见路径
         candidates = []
         if platform.system() == "Darwin":
-            candidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/opt/local/bin/ffmpeg"]
+            candidates = [
+                "/opt/homebrew/bin/ffmpeg", 
+                "/usr/local/bin/ffmpeg", 
+                "/opt/local/bin/ffmpeg",
+                "/usr/bin/ffmpeg"
+            ]
         elif platform.system() == "Linux":
             candidates = ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
         elif platform.system() == "Windows":
-            candidates = [r"C:\ffmpeg\bin\ffmpeg.exe", r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"]
+            candidates = [
+                r"C:\ffmpeg\bin\ffmpeg.exe", 
+                r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+                os.path.join(os.getcwd(), "ffmpeg.exe")
+            ]
 
         for p in candidates:
             if os.path.exists(p):
@@ -57,6 +73,13 @@ class ConfigManager:
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     raw = json.load(f)
+                
+                # 如果版本过旧，强制覆盖某些关键默认值
+                if raw.get("_version", 0) < 8:
+                    raw["cookies_browser"] = "none"
+                    if not raw.get("ffmpeg_path"):
+                        raw["ffmpeg_path"] = self._auto_find_ffmpeg()
+
                 merged = {**self.defaults, **raw}
                 self.settings = self._validate(merged)
                 self._migrate(self.settings)
@@ -82,6 +105,13 @@ class ConfigManager:
     def _validate(self, cfg: dict) -> dict:
         if cfg.get("language") not in VALID_LANGUAGES: cfg["language"] = "zh_CN"
         if cfg.get("default_quality") not in VALID_QUALITIES: cfg["default_quality"] = "1080p"
+        
+        p = cfg.get("proxy_url", "").strip()
+        if p and not any(p.startswith(s) for s in ["http://", "https://", "socks5://"]):
+            cfg["proxy_url"] = ""
+        else:
+            cfg["proxy_url"] = p
+            
         dp = cfg.get("download_path", "")
         if not dp or not os.path.isdir(dp): cfg["download_path"] = os.path.expanduser("~/Downloads")
         cfg["max_retries"] = max(1, min(int(cfg.get("max_retries", 10)), 50))

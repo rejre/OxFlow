@@ -3,6 +3,13 @@ OxFlow - Main Window
 Universal Downloader built with CustomTkinter.
 """
 
+# Force imports for PyInstaller discovery
+import requests
+import psutil
+import PIL.Image
+import certifi
+import yt_dlp
+
 import customtkinter as ctk
 import psutil
 import threading
@@ -40,7 +47,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.parent = parent
         self.i18n = parent.i18n
         self.title(f"{self.i18n.get('settings')} — OxFlow")
-        self.geometry("560x580")
+        self.geometry("600x740")
         self.resizable(False, False)
         self.configure(fg_color=BG_MAIN)
         self.attributes("-topmost", True)
@@ -48,29 +55,83 @@ class SettingsWindow(ctk.CTkToplevel):
         self._build()
 
     def _build(self):
-        ctk.CTkLabel(self, text=self.i18n.get("pref_title"), font=("Helvetica", 20, "bold"), text_color=ACCENT).pack(pady=(30, 24))
+        # Scrollable frame for settings
+        self.scroll_frame = ctk.CTkScrollableFrame(self, fg_color="transparent", width=580, height=660)
+        self.scroll_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
+
+        ctk.CTkLabel(self.scroll_frame, text=self.i18n.get("pref_title"), font=("Helvetica", 22, "bold"), text_color=ACCENT).pack(pady=(20, 20))
+        
+        # --- Appearance Section ---
+        self._section_label(self.i18n.get("appearance"))
+        app_frame = ctk.CTkFrame(self.scroll_frame, fg_color=BG_CARD, corner_radius=10); app_frame.pack(fill="x", padx=40, pady=(4, 16))
+        
+        # Theme
+        ctk.CTkLabel(app_frame, text=self.i18n.get("theme"), font=("Helvetica", 12), text_color=TEXT_SEC).pack(anchor="w", padx=20, pady=(10, 0))
+        self.theme_var = ctk.StringVar(value=self.parent.app_config.settings.get("appearance_mode", "System"))
+        theme_map = {self.i18n.get("theme_light"): "Light", self.i18n.get("theme_dark"): "Dark", self.i18n.get("theme_system"): "System"}
+        theme_values = [self.i18n.get("theme_light"), self.i18n.get("theme_dark"), self.i18n.get("theme_system")]
+        
+        display_theme = "System"
+        for k, v in theme_map.items():
+            if v == self.theme_var.get(): display_theme = k
+            
+        self.theme_menu = ctk.CTkOptionMenu(app_frame, values=theme_values, width=440, height=38, fg_color=BG_ENTRY, button_color=ACCENT, text_color=TEXT_PRI, command=self._update_theme_preview)
+        self.theme_menu.set(display_theme)
+        self.theme_menu.pack(pady=(4, 10), padx=20)
+
+        # Opacity
+        ctk.CTkLabel(app_frame, text=self.i18n.get("opacity"), font=("Helvetica", 12), text_color=TEXT_SEC).pack(anchor="w", padx=20, pady=(10, 0))
+        self.opacity_var = ctk.DoubleVar(value=self.parent.app_config.settings.get("window_opacity", 1.0))
+        self.opacity_slider = ctk.CTkSlider(app_frame, from_=0.4, to=1.0, number_of_steps=60, variable=self.opacity_var, fg_color=BG_ENTRY, progress_color=ACCENT, button_color=ACCENT, command=self._update_opacity_preview)
+        self.opacity_slider.pack(pady=(4, 16), padx=20, fill="x")
+
         self._section_label(self.i18n.get("lang_label"))
         self.lang_var = ctk.StringVar(value=self.parent.app_config.settings["language"])
-        ctk.CTkOptionMenu(self, values=["en", "zh_CN", "ja"], variable=self.lang_var, width=320, height=38, fg_color=BG_ENTRY, button_color=ACCENT, text_color=TEXT_PRI).pack(pady=(4, 16))
+        ctk.CTkOptionMenu(self.scroll_frame, values=["en", "zh_CN", "ja"], variable=self.lang_var, width=480, height=38, fg_color=BG_ENTRY, button_color=ACCENT, text_color=TEXT_PRI).pack(pady=(4, 16))
+        
         self._section_label(self.i18n.get("path_label"))
-        pf = ctk.CTkFrame(self, fg_color="transparent"); pf.pack(fill="x", padx=60, pady=(4, 16))
+        pf = ctk.CTkFrame(self.scroll_frame, fg_color="transparent"); pf.pack(fill="x", padx=50, pady=(4, 16))
         self.path_var = ctk.StringVar(value=self.parent.app_config.settings["download_path"])
-        ctk.CTkEntry(pf, textvariable=self.path_var, width=360, height=38, fg_color=BG_ENTRY, text_color=TEXT_PRI, border_color=BORDER).pack(side="left", padx=(0, 10))
+        ctk.CTkEntry(pf, textvariable=self.path_var, width=380, height=38, fg_color=BG_ENTRY, text_color=TEXT_PRI, border_color=BORDER).pack(side="left", padx=(0, 10))
         ctk.CTkButton(pf, text=self.i18n.get("browse"), width=72, height=38, fg_color=BG_BTN, border_width=1, border_color=BORDER, command=self._browse_path).pack(side="left")
+        
         self._section_label(self.i18n.get("ffmpeg_label"))
-        ff = ctk.CTkFrame(self, fg_color="transparent"); ff.pack(fill="x", padx=60, pady=(4, 16))
+        ff = ctk.CTkFrame(self.scroll_frame, fg_color="transparent"); ff.pack(fill="x", padx=50, pady=(4, 16))
         self.ffmpeg_var = ctk.StringVar(value=self.parent.app_config.settings.get("ffmpeg_path", ""))
-        ctk.CTkEntry(ff, textvariable=self.ffmpeg_var, width=360, height=38, fg_color=BG_ENTRY, text_color=TEXT_PRI, border_color=BORDER).pack(side="left", padx=(0, 10))
+        ctk.CTkEntry(ff, textvariable=self.ffmpeg_var, width=380, height=38, fg_color=BG_ENTRY, text_color=TEXT_PRI, border_color=BORDER).pack(side="left", padx=(0, 10))
         ctk.CTkButton(ff, text=self.i18n.get("browse"), width=72, height=38, fg_color=BG_BTN, border_width=1, border_color=BORDER, command=self._browse_ffmpeg).pack(side="left")
+        
+        self._section_label(self.i18n.get("proxy_label"))
+        self.proxy_var = ctk.StringVar(value=self.parent.app_config.settings.get("proxy_url", ""))
+        ctk.CTkEntry(self.scroll_frame, textvariable=self.proxy_var, width=480, height=38, fg_color=BG_ENTRY, text_color=ACCENT, border_color=BORDER, placeholder_text="http://127.0.0.1:7890").pack(pady=(4, 16))
+
+        self._section_label(self.i18n.get("cookies_label"))
+        self.cookies_var = ctk.StringVar(value=self.parent.app_config.settings.get("cookies_browser", "none"))
+        # 增加 None 选项
+        cookie_options = ["none", "chrome", "safari", "edge", "firefox", "opera", "vivaldi"]
+        self.cookies_menu = ctk.CTkOptionMenu(self.scroll_frame, values=cookie_options, variable=self.cookies_var, width=160, height=38, fg_color=BG_ENTRY, button_color=ACCENT, text_color=TEXT_PRI)
+        self.cookies_menu.pack(pady=(4, 16), anchor="w", padx=60)
+
         self._section_label(self.i18n.get("quality_label"))
         self.quality_var = ctk.StringVar(value=self.parent.app_config.settings.get("default_quality", "1080p"))
-        ctk.CTkOptionMenu(self, values=RESOLUTIONS, variable=self.quality_var, width=160, height=38, fg_color=BG_ENTRY, button_color=ACCENT, text_color=TEXT_PRI).pack(pady=(4, 16))
-        lp_frame = ctk.CTkFrame(self, fg_color="transparent"); lp_frame.pack(fill="x", padx=60, pady=(0, 24))
+        ctk.CTkOptionMenu(self.scroll_frame, values=RESOLUTIONS, variable=self.quality_var, width=160, height=38, fg_color=BG_ENTRY, button_color=ACCENT, text_color=TEXT_PRI).pack(pady=(4, 16), anchor="w", padx=60)
+        
+        lp_frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent"); lp_frame.pack(fill="x", padx=60, pady=(0, 24))
         self.low_power_var = ctk.BooleanVar(value=self.parent.app_config.settings.get("low_power_mode", False))
         ctk.CTkCheckBox(lp_frame, text=self.i18n.get("low_power"), variable=self.low_power_var, fg_color=ACCENT, text_color=TEXT_PRI).pack(side="left")
-        ctk.CTkButton(self, text=self.i18n.get("save_apply"), height=44, width=200, fg_color=ACCENT, text_color="#000000", font=("Helvetica", 14, "bold"), command=self._apply).pack(pady=(0, 30))
+        
+        ctk.CTkButton(self.scroll_frame, text=self.i18n.get("save_apply"), height=52, width=320, fg_color=ACCENT, text_color="#000000", font=("Helvetica", 16, "bold"), corner_radius=26, command=self._apply).pack(pady=(30, 60))
 
-    def _section_label(self, text): ctk.CTkLabel(self, text=text, font=("Helvetica", 12), text_color=TEXT_SEC).pack(anchor="w", padx=60)
+    def _section_label(self, text): ctk.CTkLabel(self.scroll_frame, text=text, font=("Helvetica", 13, "bold"), text_color=TEXT_SEC).pack(anchor="w", padx=60, pady=(15, 5))
+    
+    def _update_theme_preview(self, val):
+        theme_map = {self.i18n.get("theme_light"): "Light", self.i18n.get("theme_dark"): "Dark", self.i18n.get("theme_system"): "System"}
+        ctk.set_appearance_mode(theme_map.get(val, "System"))
+        
+    def _update_opacity_preview(self, val):
+        self.parent.attributes("-alpha", float(val))
+        self.attributes("-alpha", float(val))
+
     def _browse_path(self):
         path = filedialog.askdirectory(initialdir=self.path_var.get())
         if path: self.path_var.set(path)
@@ -78,8 +139,19 @@ class SettingsWindow(ctk.CTkToplevel):
         path = filedialog.askdirectory(title="Select FFmpeg bin directory", initialdir=self.ffmpeg_var.get() or "/usr/local/bin")
         if path: self.ffmpeg_var.set(path)
     def _apply(self):
-        self.parent.app_config.save({"language": self.lang_var.get(), "download_path": self.path_var.get(), "ffmpeg_path": self.ffmpeg_var.get(), "default_quality": self.quality_var.get(), "low_power_mode": self.low_power_var.get()})
-        self.parent.update_global_config(lang=self.lang_var.get(), path=self.path_var.get(), ffmpeg=self.ffmpeg_var.get(), quality=self.quality_var.get())
+        theme_map = {self.i18n.get("theme_light"): "Light", self.i18n.get("theme_dark"): "Dark", self.i18n.get("theme_system"): "System"}
+        self.parent.app_config.save({
+            "language": self.lang_var.get(), 
+            "download_path": self.path_var.get(), 
+            "ffmpeg_path": self.ffmpeg_var.get(), 
+            "proxy_url": self.proxy_var.get(),
+            "cookies_browser": self.cookies_var.get(),
+            "default_quality": self.quality_var.get(), 
+            "low_power_mode": self.low_power_var.get(),
+            "appearance_mode": theme_map.get(self.theme_menu.get(), "System"),
+            "window_opacity": self.opacity_var.get()
+        })
+        self.parent.update_global_config()
         self.destroy()
 
 class MainWindow(ctk.CTk):
@@ -101,7 +173,15 @@ class MainWindow(ctk.CTk):
     def _init_state(self):
         self.app_config = ConfigManager()
         self.i18n = I18nManager(lang=self.app_config.settings["language"])
-        self.engine = DownloadEngine(progress_callback=self._on_progress, log_callback=self._on_log, ffmpeg_path=self.app_config.settings.get("ffmpeg_path"), max_retries=self.app_config.settings.get("max_retries", 10), concurrent_fragments=self.app_config.settings.get("concurrent_fragments", 4))
+        self.engine = DownloadEngine(
+            progress_callback=self._on_progress, 
+            log_callback=self._on_log, 
+            ffmpeg_path=self.app_config.settings.get("ffmpeg_path"), 
+            max_retries=self.app_config.settings.get("max_retries", 10), 
+            concurrent_fragments=self.app_config.settings.get("concurrent_fragments", 4),
+            proxy=self.app_config.settings.get("proxy_url"),
+            cookies_browser=self.app_config.settings.get("cookies_browser")
+        )
         self.selected_res = self.app_config.settings.get("default_quality", "1080p")
         self.video_info = None
         self.is_downloading = False
@@ -112,20 +192,26 @@ class MainWindow(ctk.CTk):
 
     def _init_window(self):
         self.title("OxFlow")
-        self.geometry("1140x780")
-        self.minsize(900, 640)
+        self.geometry("1140x820")
+        self.minsize(900, 680)
         self.configure(fg_color=BG_MAIN)
-        ctk.set_appearance_mode("dark")
+        ctk.set_appearance_mode(self.app_config.settings.get("appearance_mode", "Dark"))
+        self.attributes("-alpha", self.app_config.settings.get("window_opacity", 1.0))
 
     def _load_icon(self):
         try:
             icon_path = "icon.png"
-            if hasattr(sys, "_MEIPASS"): icon_path = os.path.join(sys._MEIPASS, "icon.png")
+            if hasattr(sys, "_MEIPASS"):
+                icon_path = os.path.join(sys._MEIPASS, "icon.png")
+            else:
+                icon_path = os.path.join(os.path.dirname(__file__), "..", "..", "icon.png")
+
             if os.path.exists(icon_path):
                 from PIL import Image
                 img = ctk.CTkImage(Image.open(icon_path), size=(32, 32))
                 self.after(250, lambda: self.wm_iconphoto(True, img._light_image))
-        except: pass
+        except Exception as e:
+            logger.error(f"Failed to load icon: {e}")
 
     def _create_menus(self):
         menubar = Menu(self); self.configure(menu=menubar)
@@ -148,7 +234,6 @@ class MainWindow(ctk.CTk):
 
     def _select_all(self, event=None):
         self.url_entry.focus_set()
-        # For ctk entry, we need to select the underlying tkinter entry
         self.url_entry.select_range(0, "end")
         self.url_entry.icursor("end")
         self.url_entry.xview("end")
@@ -161,14 +246,14 @@ class MainWindow(ctk.CTk):
         self._build_status_bar()
 
     def _build_topbar(self):
-        tb = ctk.CTkFrame(self, height=54, fg_color=BG_CARD, corner_radius=0); tb.pack(fill="x"); tb.pack_propagate(False)
+        tb = ctk.CTkFrame(self, height=60, fg_color=BG_CARD, corner_radius=0); tb.pack(fill="x"); tb.pack_propagate(False)
         left = ctk.CTkFrame(tb, fg_color="transparent"); left.pack(side="left", padx=24, pady=10)
-        self.brand_lbl = ctk.CTkLabel(left, text="OXFLOW", font=("Helvetica", 17, "bold"), text_color=ACCENT); self.brand_lbl.pack(side="left")
-        self.ver_lbl = ctk.CTkLabel(left, text=f"  {self.i18n.version}", font=("Helvetica", 10), text_color=TEXT_DIM); self.ver_lbl.pack(side="left", pady=(2, 0))
+        self.brand_lbl = ctk.CTkLabel(left, text="OXFLOW", font=("Helvetica", 19, "bold"), text_color=ACCENT); self.brand_lbl.pack(side="left")
+        self.ver_lbl = ctk.CTkLabel(left, text=f"  {self.i18n.version}", font=("Helvetica", 11), text_color=TEXT_DIM); self.ver_lbl.pack(side="left", pady=(3, 0))
         right = ctk.CTkFrame(tb, fg_color="transparent"); right.pack(side="right", padx=20)
-        self.open_folder_btn = ctk.CTkButton(right, text="📂", width=36, height=32, fg_color=BG_BTN, border_width=1, border_color=BORDER, command=self._open_download_folder); self.open_folder_btn.pack(side="left", padx=(0, 8))
-        self.settings_btn = ctk.CTkButton(right, text="Settings", width=100, height=32, fg_color=BG_BTN, border_width=1, border_color=BORDER, text_color=TEXT_PRI, command=self._open_settings); self.settings_btn.pack(side="left")
-        self.path_lbl = ctk.CTkLabel(tb, text="", font=("Helvetica", 11), text_color=TEXT_SEC, cursor="hand2"); self.path_lbl.pack(side="left", padx=20); self.path_lbl.bind("<Button-1>", lambda _: self._open_settings())
+        self.open_folder_btn = ctk.CTkButton(right, text="📂", width=40, height=36, fg_color=BG_BTN, border_width=1, border_color=BORDER, command=self._open_download_folder); self.open_folder_btn.pack(side="left", padx=(0, 10))
+        self.settings_btn = ctk.CTkButton(right, text="⚙️", width=40, height=36, font=("Helvetica", 18), fg_color=BG_BTN, border_width=1, border_color=BORDER, text_color=TEXT_PRI, command=self._open_settings); self.settings_btn.pack(side="left")
+        self.path_lbl = ctk.CTkLabel(tb, text="", font=("Helvetica", 12), text_color=TEXT_SEC, cursor="hand2"); self.path_lbl.pack(side="left", padx=25); self.path_lbl.bind("<Button-1>", lambda _: self._open_settings())
 
     def _build_url_bar(self):
         frame = ctk.CTkFrame(self, fg_color="transparent"); frame.pack(fill="x", padx=40, pady=(20, 12))
@@ -208,15 +293,24 @@ class MainWindow(ctk.CTk):
         self.download_btn = ctk.CTkButton(br, text="DOWNLOAD", width=170, height=40, fg_color=ACCENT, text_color="#000000", font=("Helvetica", 13, "bold"), state="disabled", command=self._handle_download_action); self.download_btn.pack(side="right")
 
     def _refresh_texts(self):
-        self.title(self.i18n.get("title")); self.brand_lbl.configure(text=self.i18n.get("brand").upper()); self.settings_btn.configure(text=self.i18n.get("settings")); self.url_entry.configure(placeholder_text=self.i18n.get("placeholder")); self.analyze_btn.configure(text=self.i18n.get("analyze"))
+        self.title(self.i18n.get("title")); self.brand_lbl.configure(text=self.i18n.get("brand").upper()); 
+        self.url_entry.configure(placeholder_text=self.i18n.get("placeholder")); self.analyze_btn.configure(text=self.i18n.get("analyze"))
         self.download_btn.configure(text=self.i18n.get("cancel") if self.is_downloading else self.i18n.get("download"))
         self.audio_btn.configure(text=self.i18n.get("audio_only"))
         self.path_lbl.configure(text=f"📂  {self.app_config.settings['download_path']}")
         if not self.video_info: self.video_lbl.configure(text=self.i18n.get("ready"))
+        self.ver_lbl.configure(text=f"  {self.i18n.version}")
 
-    def update_global_config(self, lang, path, ffmpeg="", quality="1080p"):
-        self.i18n.set_language(lang); self.engine.ffmpeg_path = ffmpeg or self.engine.ffmpeg_path; self._refresh_texts()
-        self._on_log(f"[CONFIG] Sync: {lang}")
+    def update_global_config(self):
+        s = self.app_config.settings
+        self.i18n.set_language(s["language"])
+        self.engine.ffmpeg_path = s.get("ffmpeg_path") or self.engine.ffmpeg_path
+        self.engine.proxy = s.get("proxy_url")
+        self.engine.cookies_browser = s.get("cookies_browser")
+        ctk.set_appearance_mode(s.get("appearance_mode", "Dark"))
+        self.attributes("-alpha", s.get("window_opacity", 1.0))
+        self._refresh_texts()
+        self._on_log(f"[CONFIG] Sync: {s['language']} " + (f"(Proxy: ON)" if self.engine.proxy else "") + f" (Opacity: {s.get('window_opacity', 1.0)})")
 
     def _open_settings(self): SettingsWindow(self)
     def _open_download_folder(self):
@@ -308,6 +402,8 @@ class MainWindow(ctk.CTk):
     def _start_download(self):
         if not self.video_info: return
         self.is_downloading = True; self._download_start_time = time.monotonic()
+        # 优化：开始下载后释放解析按钮，允许连续添加任务
+        self.analyze_btn.configure(state="normal")
         self.download_btn.configure(text=self.i18n.get("cancel"), fg_color=BG_BTN, hover_color=BG_ENTRY, text_color=TEXT_PRI)
         opts = {"outtmpl": os.path.join(self.app_config.settings["download_path"], "%(title)s.%(ext)s"), "resolution": self.selected_res, "audio_only": (self.selected_res == "mp3"), "is_direct": self.video_info.get("is_direct", False), "title": self.video_info.get("title", "file")}
         self.engine.download(self.url_entry.get().strip(), opts)
