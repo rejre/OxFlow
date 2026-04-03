@@ -144,11 +144,17 @@ class DownloadEngine:
             'outtmpl': out_tmpl,
             'progress_hooks': [self._ydl_hook],
             'nocheckcertificate': True,
-            'continuedl': True,
-            'concurrent_fragment_downloads': options.get('concurrent_fragments', self.concurrent_fragments),
+            'continuedl': True,              # ✅ 启用断点续传
+            'retries': self.max_retries,     # ✅ 增加重试次数
+            'fragment_retries': self.max_retries,  # ✅ 碎片重试
+            'skip_unavailable_fragments': True,    # ✅ 跳过不可用的碎片
+            'socket_timeout': 60,             # ✅ socket 超时时间
+            'http_chunk_size': 1024*1024,    # ✅ 增加 HTTP 块大小到 1MB
+            'concurrent_fragment_downloads': min(options.get('concurrent_fragments', self.concurrent_fragments), 4),  # ✅ 限制并发
             'ffmpeg_location': self.ffmpeg_path,
             'headers': {'User-Agent': BROWSER_UA},
             'quiet': True,
+            'no_warnings': True,
         }
         if proxy: ydl_opts['proxy'] = proxy
         if options.get('audio_only'):
@@ -156,32 +162,55 @@ class DownloadEngine:
             if self.has_ffmpeg():
                 ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '320'}]
 
-        # 核心修复：下载时的 Cookie 权限检测
+        # 核心修复：下载时的 Cookie 权限检测和重试机制
         success = False
-        if cookies_browser and cookies_browser.lower() != "none":
+        retry_count = 0
+        max_attempts = 3
+        
+        while retry_count < max_attempts and not self._is_cancelled:
             try:
-                copts = ydl_opts.copy()
-                copts['cookiesfrombrowser'] = (cookies_browser, None, None, None)
-                self._log(f"[START] Media download with {cookies_browser} cookies...")
-                with yt_dlp.YoutubeDL(copts) as ydl: ydl.download([url])
-                success = True
-            except Exception as e:
-                if "Operation not permitted" in str(e) or "Permission denied" in str(e):
-                    self._log(f"[WARN] Cookie access denied, retrying without cookies...")
-                else:
-                    self._log(f"[ERROR] Download with cookies failed: {e}")
-                    return
+                if cookies_browser and cookies_browser.lower() != "none":
+                    try:
+                        copts = ydl_opts.copy()
+                        copts['cookiesfrombrowser'] = (cookies_browser, None, None, None)
+                        self._log(f"[START] Media download with {cookies_browser} cookies... (attempt {retry_count + 1}/{max_attempts})")
+                        with yt_dlp.YoutubeDL(copts) as ydl: ydl.download([url])
+                        success = True
+                        break
+                    except Exception as e:
+                        if "Operation not permitted" in str(e) or "Permission denied" in str(e):
+                            self._log(f"[WARN] Cookie access denied, retrying without cookies...")
+                        else:
+                            self._log(f"[WARN] Download with cookies failed: {e}, retrying...")
+                            retry_count += 1
 
-        if not success and not self._is_cancelled:
-            try:
-                self._log(f"[START] Media download (Universal mode)...")
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl: ydl.download([url])
-                success = True
+                if not success and not self._is_cancelled:
+                    self._log(f"[START] Media download (Universal mode)... (attempt {retry_count + 1}/{max_attempts})")
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl: ydl.download([url])
+                    success = True
+                    break
+                    
             except Exception as e:
-                self._log(f"[ERROR] {e}" if not self._is_cancelled else "[CANCELLED] Task cancelled.")
+                error_msg = str(e)
+                # 判断是网络问题还是其他问题
+                if any(x in error_msg for x in ['bytes read', 'connection', 'timeout', 'HTTP 503', 'HTTP 429']):
+                    retry_count += 1
+                    if retry_count < max_attempts:
+                        wait_time = min(2 ** retry_count, 60)  # 指数退避：2s, 4s, 8s... 最多60s
+                        self._log(f"[WARN] Network error: {error_msg}. Retrying in {wait_time}s... (attempt {retry_count + 1}/{max_attempts})")
+                        time.sleep(wait_time)
+                    else:
+                        self._log(f"[ERROR] {error_msg}" if not self._is_cancelled else "[CANCELLED] Task cancelled.")
+                        break
+                else:
+                    # 非网络问题，不重试
+                    self._log(f"[ERROR] {error_msg}" if not self._is_cancelled else "[CANCELLED] Task cancelled.")
+                    break
 
         if success and not self._is_cancelled:
             self._log("[SUCCESS] Download finished.")
+        elif not self._is_cancelled and not success:
+            self._log("[ERROR] Download failed after multiple retries.")
 
     def _download_direct(self, url, options):
         title = options.get('title', 'file')
@@ -195,25 +224,74 @@ class DownloadEngine:
         
         proxies = {"http": proxy, "https": proxy} if proxy else None
 
-        try:
-            self._log(f"[START] Direct download: {title}")
-            with requests.get(url, stream=True, timeout=60, headers={'User-Agent': BROWSER_UA}, allow_redirects=True, proxies=proxies) as r:
-                r.raise_for_status()
-                total = int(r.headers.get('content-length', 0) or 0)
-                downloaded = 0
-                start = time.monotonic()
-                with open(dest, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=1024*64):
-                        if self._is_cancelled: break
-                        if chunk:
-                            f.write(chunk); downloaded += len(chunk)
-                            if total > 0:
-                                p = (downloaded / total) * 100
-                                spd = downloaded / (time.monotonic() - start + 0.1)
-                                self._on_progress({'_percent_str': f"{p:.1f}%", '_speed_str': self.format_size(spd)+"/s"})
-            if not self._is_cancelled: self._log("[SUCCESS] Direct download finished.")
-        except Exception as e:
-            self._log(f"[ERROR] {e}" if not self._is_cancelled else "[CANCELLED] Direct download cancelled.")
+        retry_count = 0
+        max_retries = 3
+        
+        while retry_count < max_retries and not self._is_cancelled:
+            try:
+                self._log(f"[START] Direct download: {title} (attempt {retry_count + 1}/{max_retries})")
+                
+                # 如果文件已部分下载，支持断点续传
+                resume_header = {}
+                if os.path.exists(dest):
+                    downloaded_size = os.path.getsize(dest)
+                    resume_header = {'Range': f'bytes={downloaded_size}-'}
+                    self._log(f"[INFO] Resuming from {self.format_size(downloaded_size)}")
+                
+                with requests.get(
+                    url, 
+                    stream=True, 
+                    timeout=60, 
+                    headers={**{'User-Agent': BROWSER_UA}, **resume_header},
+                    allow_redirects=True, 
+                    proxies=proxies
+                ) as r:
+                    r.raise_for_status()
+                    total = int(r.headers.get('content-length', 0) or 0)
+                    downloaded = 0
+                    start = time.monotonic()
+                    
+                    # 如果是续传，添加已下载的大小
+                    if resume_header and os.path.exists(dest):
+                        downloaded = os.path.getsize(dest)
+                        total += downloaded
+                    
+                    open_mode = 'ab' if resume_header and os.path.exists(dest) else 'wb'
+                    with open(dest, open_mode) as f:
+                        for chunk in r.iter_content(chunk_size=1024*256):  # 增加到 256KB
+                            if self._is_cancelled: break
+                            if chunk:
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                if total > 0:
+                                    p = (downloaded / total) * 100
+                                    spd = downloaded / (time.monotonic() - start + 0.1)
+                                    self._on_progress({'_percent_str': f"{p:.1f}%", '_speed_str': self.format_size(spd)+"/s"})
+                
+                if not self._is_cancelled:
+                    self._log("[SUCCESS] Direct download finished.")
+                    break
+                    
+            except requests.exceptions.ConnectionError as e:
+                retry_count += 1
+                if retry_count < max_retries:
+                    wait_time = min(2 ** retry_count, 60)
+                    self._log(f"[WARN] Connection error: {e}. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    self._log(f"[ERROR] Connection failed after {max_retries} retries.")
+                    
+            except requests.exceptions.Timeout as e:
+                retry_count += 1
+                if retry_count < max_retries:
+                    wait_time = min(2 ** retry_count, 60)
+                    self._log(f"[WARN] Download timeout. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    self._log(f"[ERROR] Timeout after {max_retries} retries.")
+                    
+            except Exception as e:
+                self._log(f"[ERROR] {e}" if not self._is_cancelled else "[CANCELLED] Direct download cancelled.")
 
     def _ydl_hook(self, d):
         if self._is_cancelled: raise Exception("User cancelled")

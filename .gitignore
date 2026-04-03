@@ -6,19 +6,48 @@ __pycache__/
 env/
 venv/
 ENV/
+*.egg-info/
+.eggs/
 
 # Build and Dist
 build/
 dist/
 *.spec
+*.whl
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
 # macOS
 .DS_Store
 .AppleDouble
 .LSOverride
 *.dmg
+staging_dmg/
 
 # IDE
 .vscode/
 .idea/
-staging_dmg/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Downloads
+downloads/
+*.tmp
